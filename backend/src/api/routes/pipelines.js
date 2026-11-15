@@ -1,3 +1,4 @@
+import { validateTasks } from '../../engine/graph.js';
 import { createPipeline, getPipeline, listPipelines } from '../../db/pipelines.js';
 
 const taskSchema = {
@@ -41,11 +42,22 @@ export default async function pipelineRoutes(app) {
   });
 
   app.post('/api/pipelines', { schema: createPipelineSchema }, async (request, reply) => {
-    const body = request.body;
-    const pipelineId = await createPipeline({
-      name: body.name.trim(),
-      tasks: body.tasks.map((task) => ({ ...task, name: task.name.trim() })),
-    });
+    const input = {
+      name: request.body.name.trim(),
+      tasks: request.body.tasks.map((task) => ({
+        ...task,
+        name: task.name.trim(),
+        dependsOn: task.dependsOn.map((dependency) => dependency.trim()),
+      })),
+    };
+
+    // Reject cycles, unknown references and duplicates before touching the database.
+    const problems = validateTasks(input.tasks);
+    if (problems.length > 0) {
+      return reply.code(400).send({ error: 'Invalid task graph', details: problems });
+    }
+
+    const pipelineId = await createPipeline(input);
     return reply.code(201).send(await getPipeline(pipelineId));
   });
 }
