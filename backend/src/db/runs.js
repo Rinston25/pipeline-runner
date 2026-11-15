@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './pool.js';
+import { topologicalOrder } from '../engine/graph.js';
 
 // Atomically move a run from queued to running. Returns the pipeline id, or null when
 // the run is not queued any more (another worker took it, or it is a duplicate queue entry).
@@ -123,4 +124,94 @@ export async function listQueuedRunIds(olderThanMs) {
     [olderThanMs],
   );
   return rows.map((row) => row.id);
+}
+
+// Create a run for a pipeline, copying its tasks into run_tasks so later runs and
+// inspection do not depend on the live definition. Returns null if the pipeline is missing.
+export async function createRun(pipelineId) {
+  return withTransaction(async (client) => {
+    const pipeline = await client.query('SELECT id FROM pipelines WHERE id = $1', [pipelineId]);
+    if (pipeline.rowCount === 0) return null;
+
+    const run = await client.query('INSERT INTO runs (pipeline_id) VALUES ($1) RETURNING id', [
+      pipelineId,
+    ]);
+    const runId = run.rows[0].id;
+    await client.query(
+      `INSERT INTO run_tasks (run_id, task_id, name, duration_ms, should_fail)
+       SELECT $1, id, name, duration_ms, should_fail FROM tasks WHERE pipeline_id = $2`,
+      [runId, pipelineId],
+    );
+    return runId;
+  });
+}
+
+const runColumns = `
+  r.id, r.pipeline_id, p.name AS pipeline_name, r.status, r.created_at, r.started_at,
+  r.finished_at, r.error,
+  (EXTRACT(EPOCH FROM (r.finished_at - r.started_at)) * 1000)::int AS duration_ms`;
+
+function toRunSummary(row) {
+  return {
+    id: row.id,
+    pipelineId: row.pipeline_id,
+    pipelineName: row.pipeline_name,
+    status: row.status,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    durationMs: row.duration_ms,
+    error: row.error,
+  };
+}
+
+// Most recent runs of a pipeline, newest first.
+export async function listRuns(pipelineId, limit = 50) {
+  const { rows } = await pool.query(
+    `SELECT ${runColumns}
+     FROM runs r JOIN pipelines p ON p.id = r.pipeline_id
+     WHERE r.pipeline_id = $1
+     ORDER BY r.created_at DESC
+     LIMIT $2`,
+    [pipelineId, limit],
+  );
+  return rows.map(toRunSummary);
+}
+
+// A run with the state of every task. Tasks are returned in dependency order.
+export async function getRun(runId) {
+  const runResult = await pool.query(
+    `SELECT ${runColumns}
+     FROM runs r JOIN pipelines p ON p.id = r.pipeline_id
+     WHERE r.id = $1`,
+    [runId],
+  );
+  if (runResult.rowCount === 0) return null;
+
+  const tasks = await loadRunTasks(runId);
+  const taskResult = await pool.query(
+    `SELECT name, status, started_at, finished_at, elapsed_ms, error
+     FROM run_tasks WHERE run_id = $1`,
+    [runId],
+  );
+  const stateByName = new Map(taskResult.rows.map((row) => [row.name, row]));
+
+  const taskByName = new Map(tasks.map((task) => [task.name, task]));
+  const orderedTasks = topologicalOrder(tasks).map((name) => {
+    const task = taskByName.get(name);
+    const state = stateByName.get(name);
+    return {
+      name,
+      status: state.status,
+      dependsOn: task.dependsOn,
+      configuredDurationMs: task.durationMs,
+      shouldFail: task.shouldFail,
+      startedAt: state.started_at,
+      finishedAt: state.finished_at,
+      elapsedMs: state.elapsed_ms,
+      error: state.error,
+    };
+  });
+
+  return { ...toRunSummary(runResult.rows[0]), tasks: orderedTasks };
 }
