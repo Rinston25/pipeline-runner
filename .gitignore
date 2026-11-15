@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# build output
+.nuxt/
+.output/
+dist/
+coverage/
+
+# local environment and secrets
+.env
+.env.*
+!.env.example
+
+# logs and OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
