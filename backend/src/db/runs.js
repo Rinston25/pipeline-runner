@@ -103,3 +103,24 @@ export async function abortRun(runId, reason, { staleMs } = {}) {
     return rows[0].pipeline_id;
   });
 }
+
+// Running runs whose worker has stopped sending heartbeats.
+export async function listStaleRunIds(staleMs) {
+  const { rows } = await pool.query(
+    `SELECT id FROM runs
+     WHERE status = 'running' AND heartbeat_at < now() - ($1::int * interval '1 millisecond')`,
+    [staleMs],
+  );
+  return rows.map((row) => row.id);
+}
+
+// Runs still waiting in the database for longer than `olderThanMs`.
+export async function listQueuedRunIds(olderThanMs) {
+  const { rows } = await pool.query(
+    `SELECT id FROM runs
+     WHERE status = 'queued' AND created_at < now() - ($1::int * interval '1 millisecond')
+     ORDER BY created_at`,
+    [olderThanMs],
+  );
+  return rows.map((row) => row.id);
+}
