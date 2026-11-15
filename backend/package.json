@@ -1,0 +1,22 @@
+{
+  "name": "pipeline-runner-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API and worker for the pipeline runner",
+  "type": "module",
+  "scripts": {
+    "start:api": "node src/api/server.js",
+    "start:worker": "node src/worker/index.js",
+    "migrate": "node src/db/migrate.js",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.4.3",
+    "fastify": "^5.12.8",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.1"
+  }
+}
