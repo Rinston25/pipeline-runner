@@ -71,6 +71,16 @@ services:
       redis:
         condition: service_healthy
 
+  web:
+    build: ./frontend
+    environment:
+      # Address the BROWSER uses to reach the API (not the Docker-internal name).
+      NUXT_PUBLIC_API_BASE: http://localhost:3001
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      - api
+
 volumes:
   postgres-data:
   redis-data:
