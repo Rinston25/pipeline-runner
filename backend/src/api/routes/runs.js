@@ -16,6 +16,15 @@ export default async function runRoutes(app, { redis }) {
     const runId = await createRun(request.params.id);
     if (!runId) return reply.code(404).send({ error: 'Pipeline not found' });
 
+    // Announce before enqueueing so "queued" is always seen before "running".
+    const run = await getRun(runId);
+    await publishEvent(redis, {
+      type: 'run.updated',
+      runId,
+      pipelineId: run.pipelineId,
+      status: 'queued',
+    });
+
     // The run is already saved. If Redis is down right now the run stays "queued" and the
     // worker's recovery sweep pushes it onto the queue later, so we still accept the request.
     try {
@@ -24,13 +33,6 @@ export default async function runRoutes(app, { redis }) {
       request.log.error(error, 'Could not enqueue run; recovery will retry');
     }
 
-    const run = await getRun(runId);
-    await publishEvent(redis, {
-      type: 'run.updated',
-      runId,
-      pipelineId: run.pipelineId,
-      status: 'queued',
-    });
     return reply.code(202).send(run);
   });
 
