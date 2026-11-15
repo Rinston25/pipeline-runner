@@ -1,4 +1,8 @@
 # Local stack for the pipeline runner. Start everything with: docker compose up --build
+x-backend-environment: &backend-environment
+  DATABASE_URL: postgres://pipeline:${POSTGRES_PASSWORD:-pipeline}@postgres:5432/pipeline
+  REDIS_URL: redis://redis:6379
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -25,6 +29,47 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  # One-shot job: applies database migrations, then exits. API and worker wait for it.
+  migrate:
+    build: ./backend
+    command: ["node", "src/db/migrate.js"]
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: ./backend
+    command: ["node", "src/api/server.js"]
+    environment:
+      <<: *backend-environment
+      API_PORT: 3001
+    ports:
+      - "3001:3001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # Separate process: takes queued runs from Redis and executes their tasks.
+  # Scale with: docker compose up --scale worker=3
+  worker:
+    build: ./backend
+    command: ["node", "src/worker/index.js"]
+    environment:
+      <<: *backend-environment
+      TASK_CONCURRENCY: 3
+      RUN_CONCURRENCY: 2
+    # Gives active runs time to finish when the container is stopped.
+    stop_grace_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres-data:
