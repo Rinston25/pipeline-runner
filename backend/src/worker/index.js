@@ -2,6 +2,7 @@ import { config, QUEUE_KEY } from '../config.js';
 import { createRedis } from '../redis.js';
 import { pool } from '../db/pool.js';
 import { executeRun } from './executeRun.js';
+import { recoverRuns } from './recovery.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -32,10 +33,16 @@ async function pickUpRuns() {
   }
 }
 
+// Periodically repair crashed runs; errors are logged and retried on the next tick.
+const recoveryTimer = setInterval(() => {
+  recoverRuns(redis).catch((error) => console.error('Recovery failed:', error.message));
+}, config.recoveryIntervalMs);
+
 async function shutdown() {
   if (stopping) return;
   console.log('Shutting down: finishing active runs first');
   stopping = true;
+  clearInterval(recoveryTimer);
   while (activeRuns > 0) await sleep(200);
   queueConnection.disconnect();
   redis.disconnect();
